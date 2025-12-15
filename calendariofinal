@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestor de Turnos Médicos - Colombia + Gemini AI</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- html2canvas & jsPDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- Markdown Parser (Marked) for AI responses -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+        
+        /* Ajuste para que funcione bien dentro de iframes o divs de blogs */
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; margin: 0; padding: 0; }
+        
+        /* Estilos específicos para impresión/PDF */
+        .pdf-container {
+            background: white;
+            width: 100%;
+            /* max-width removido para permitir fluidez en el contenedor del blog */
+            margin: 0 auto;
+        }
+
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 1px;
+            background-color: #e5e7eb;
+            border: 1px solid #e5e7eb;
+        }
+
+        .calendar-day {
+            background-color: white;
+            min-height: 100px;
+            padding: 4px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .holiday-flag {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            color: #ef4444;
+            font-size: 0.7rem;
+        }
+
+        .stat-card {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+
+        /* AI Chat Styles */
+        .ai-message p { margin-bottom: 0.5em; }
+        .ai-message ul { list-style-type: disc; margin-left: 1.5em; margin-bottom: 0.5em; }
+        .ai-message strong { color: #4f46e5; }
+    </style>
+</head>
+<body class="p-2 md:p-4">
+
+    <!-- Header -->
+    <header class="w-full mx-auto mb-6 text-center">
+        <h1 class="text-2xl md:text-3xl font-bold text-slate-800"><i class="fa-solid fa-user-doctor mr-2 text-blue-600"></i>Gestión de Turnos</h1>
+        <p class="text-slate-500 mt-2 text-sm">Cálculo exacto de horas y Asistente IA Gemini ✨</p>
+    </header>
+
+    <!-- Controls Section -->
+    <div class="w-full bg-white rounded-xl shadow-md p-4 mb-6 no-print">
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            <div class="lg:col-span-2">
+                <label class="block text-sm font-medium text-slate-700 mb-2">Pegar Fila de Horario (CSV/Excel)</label>
+                <textarea id="inputData" class="w-full h-32 p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-xs font-mono" placeholder="Ej: 12345, DR. PEREZ, MEDICO, 7-19, 13:00 A 19:00 19:00 A 7:00, D, L..."></textarea>
+                <p class="text-xs text-slate-400 mt-1">Soporta múltiples turnos por celda.</p>
+            </div>
+            
+            <div class="lg:col-span-1 space-y-3">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Mes</label>
+                    <select id="selectMonth" class="w-full p-2 border border-slate-300 rounded-lg">
+                        <option value="0">Enero</option>
+                        <option value="1">Febrero</option>
+                        <option value="2">Marzo</option>
+                        <option value="3">Abril</option>
+                        <option value="4">Mayo</option>
+                        <option value="5">Junio</option>
+                        <option value="6">Julio</option>
+                        <option value="7">Agosto</option>
+                        <option value="8">Septiembre</option>
+                        <option value="9">Octubre</option>
+                        <option value="10">Noviembre</option>
+                        <option value="11" selected>Diciembre</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Año</label>
+                    <input type="number" id="selectYear" value="2025" class="w-full p-2 border border-slate-300 rounded-lg">
+                </div>
+            </div>
+
+            <div class="lg:col-span-1 flex flex-col justify-end space-y-3">
+                <button onclick="generateSchedule()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition shadow-lg flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-calendar-check"></i> Calcular
+                </button>
+                <button onclick="downloadPDF()" id="btnDownload" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 px-4 rounded-lg transition shadow-lg opacity-50 cursor-not-allowed flex items-center justify-center gap-2" disabled>
+                    <i class="fa-solid fa-file-pdf"></i> PDF
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content Area (To be Captured for PDF) -->
+    <div id="scheduleContainer" class="w-full bg-white shadow-xl rounded-none hidden">
+        <div class="p-4 md:p-8 pdf-container" id="printableArea">
+            
+            <!-- PDF Header -->
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-end border-b-2 border-slate-200 pb-4 mb-6">
+                <div class="mb-4 md:mb-0">
+                    <h2 class="text-xl md:text-2xl font-bold text-slate-800 uppercase tracking-wide">Malla de Turnos</h2>
+                    <p class="text-slate-500 text-sm mt-1">Detalle de Horas y Recargos</p>
+                </div>
+                <div class="text-left md:text-right">
+                    <h3 id="displayMonthYear" class="text-lg md:text-xl font-bold text-blue-600 capitalize">Diciembre 2025</h3>
+                    <p id="displayEmployee" class="text-sm font-medium text-slate-700 mt-1">Empleado: -</p>
+                </div>
+            </div>
+
+            <!-- Calendar Wrapper for Horizontal Scroll -->
+            <div class="mb-6 w-full overflow-x-auto">
+                <div class="min-w-[800px]"> <!-- Minimum width to prevent squashing -->
+                    <!-- Days Header -->
+                    <div class="grid grid-cols-7 bg-slate-800 text-white text-center py-2 text-sm font-semibold rounded-t-lg">
+                        <div>Lunes</div>
+                        <div>Martes</div>
+                        <div>Miércoles</div>
+                        <div>Jueves</div>
+                        <div>Viernes</div>
+                        <div>Sábado</div>
+                        <div>Domingo</div>
+                    </div>
+                    <!-- Calendar Grid -->
+                    <div id="calendarGrid" class="calendar-grid border-l border-r border-b border-slate-200">
+                        <!-- Days will be injected here via JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer Stats -->
+            <div class="mt-6 border-t pt-4">
+                <h4 class="text-sm font-bold text-slate-700 mb-3 uppercase border-b pb-1">Resumen de Horas</h4>
+                
+                <!-- Main Stats Row -->
+                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 mb-4">
+                    <div class="bg-gray-100 p-2 rounded stat-card">
+                        <span class="text-[10px] text-gray-500 font-bold uppercase">Total Horas</span>
+                        <div class="text-xl font-bold text-gray-800" id="totalHours">0</div>
+                    </div>
+                    <div class="bg-blue-50 p-2 rounded stat-card border border-blue-100">
+                        <span class="text-[10px] text-blue-500 font-bold uppercase">H. Diurnas</span>
+                        <div class="text-xl font-bold text-blue-800" id="hoursDay">0</div>
+                    </div>
+                    <div class="bg-indigo-50 p-2 rounded stat-card border border-indigo-100">
+                        <span class="text-[10px] text-indigo-500 font-bold uppercase">H. Nocturnas</span>
+                        <div class="text-xl font-bold text-indigo-800" id="hoursNight">0</div>
+                    </div>
+                    <div class="bg-orange-50 p-2 rounded stat-card border border-orange-100">
+                        <span class="text-[10px] text-orange-600 font-bold uppercase">H. Fest. Diurnas</span>
+                        <div class="text-xl font-bold text-orange-800" id="hoursHolDay">0</div>
+                    </div>
+                    <div class="bg-purple-50 p-2 rounded stat-card border border-purple-100">
+                        <span class="text-[10px] text-purple-600 font-bold uppercase">H. Fest. Noct</span>
+                        <div class="text-xl font-bold text-purple-800" id="hoursHolNight">0</div>
+                    </div>
+                     <div class="bg-green-50 p-2 rounded stat-card border border-green-100">
+                        <span class="text-[10px] text-green-600 font-bold uppercase">Turnos</span>
+                        <div class="text-xl font-bold text-green-800" id="totalShifts">0</div>
+                    </div>
+                </div>
+
+                <p class="text-[10px] text-slate-400 italic text-center">* Normativa aplicada: Jornada Diurna (06:00 - 19:00), Jornada Nocturna (19:00 - 06:00). Festivos incluyen Domingos.</p>
+            </div>
+
+            <!-- Legend -->
+            <div class="mt-4 text-xs text-slate-500 grid grid-cols-2 md:grid-cols-4 gap-2 border-t pt-2">
+                <div class="flex items-center"><div class="w-3 h-3 bg-blue-100 border border-blue-300 mr-1"></div> Turno Normal</div>
+                <div class="flex items-center"><div class="w-3 h-3 bg-indigo-100 border border-indigo-300 mr-1"></div> Noche / Cruzado</div>
+                <div class="flex items-center"><div class="w-3 h-3 bg-green-100 border border-green-300 mr-1"></div> Descanso (D)</div>
+                <div class="flex items-center"><div class="w-3 h-3 bg-red-100 border border-red-300 mr-1"></div> Incapacidad</div>
+                <div class="flex items-center"><i class="fa-solid fa-flag text-red-500 mr-1"></i> Festivo Colombia</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Gemini AI Assistant Section (Moved to the bottom) -->
+    <div id="aiAssistantContainer" class="w-full mt-8 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl shadow-md p-4 md:p-6 mb-8 border border-indigo-100 hidden no-print">
+        <div class="flex items-center mb-4">
+            <div class="bg-indigo-600 text-white p-2 rounded-lg mr-3 shadow-lg">
+                <i class="fa-solid fa-sparkles"></i>
+            </div>
+            <h2 class="text-lg md:text-xl font-bold text-indigo-900">Asistente de Turnos IA</h2>
+        </div>
+        
+        <p class="text-sm text-indigo-700 mb-4">Utiliza la inteligencia artificial de Gemini para analizar la malla y obtener respuestas concisas.</p>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <button onclick="askGemini('Analiza esta malla de turnos buscando riesgos de fatiga laboral, turnos consecutivos excesivos o descansos insuficientes según la normativa colombiana de salud. Sé EXTREMADAMENTE CONCISO y da solo las recomendaciones CLAVE.')" class="bg-white hover:bg-indigo-50 text-indigo-700 font-semibold py-2 px-4 border border-indigo-200 rounded shadow-sm transition flex items-center justify-center gap-2 text-sm">
+                <i class="fa-solid fa-user-nurse"></i> Analizar Salud/Fatiga
+            </button>
+            <button onclick="askGemini('Identifica qué fines de semana tiene libres este empleado y sugiere si la distribución de descansos es equitativa comparada con una carga estándar de 190-210 horas. Responde de forma MUY BREVE.')" class="bg-white hover:bg-blue-50 text-blue-700 font-semibold py-2 px-4 border border-blue-200 rounded shadow-sm transition flex items-center justify-content-center gap-2 text-sm">
+                <i class="fa-solid fa-calendar-week"></i> Analizar Descansos
+            </button>
+        </div>
+
+        <div class="relative">
+            <input type="text" id="customAiPrompt" placeholder="Pregunta a la IA (ej: '¿Cuántas horas tengo el día 25?')." class="w-full p-4 pr-12 border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:outline-none shadow-inner">
+            <button onclick="triggerCustomPrompt()" class="absolute right-2 top-2 bottom-2 bg-indigo-600 text-white rounded-lg px-4 hover:bg-indigo-700 transition">
+                <i class="fa-solid fa-paper-plane"></i>
+            </button>
+        </div>
+
+        <!-- AI Response Area -->
+        <div id="aiResponseArea" class="mt-4 hidden">
+            <div class="bg-white rounded-lg p-6 border border-indigo-100 shadow-inner">
+                <div id="aiLoader" class="flex items-center text-indigo-500 font-medium mb-2 hidden">
+                    <i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Gemini está pensando...
+                </div>
+                <div id="aiContent" class="prose prose-sm max-w-none text-slate-700 ai-message"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- GLOBAL VARIABLES FOR AI CONTEXT ---
+        let currentShiftsForAI = [];
+        let currentStats = {};
+        let currentEmployeeName = "";
+        let currentPeriod = "";
+
+        // --- GEMINI API INTEGRATION ---
+        const apiKey = ""; // Runtime provided
+
+        async function askGemini(prompt) {
+            const responseArea = document.getElementById('aiResponseArea');
+            const loader = document.getElementById('aiLoader');
+            const contentDiv = document.getElementById('aiContent');
+            
+            responseArea.classList.remove('hidden');
+            loader.classList.remove('hidden');
+            contentDiv.innerHTML = ''; // Clear previous
+
+            // Setting System Instruction for concise responses
+            const systemPrompt = "Actúa como un experto en gestión de turnos médicos y salud ocupacional en Colombia. El usuario requiere respuestas MUY BREVES y CONCISAS. Solo proporciona la información esencial y evita introducciones o conclusiones largas. Responde en español.";
+            
+            // Construct Context
+            const userQuery = `
+                Malla de Turnos:
+                Empleado: ${currentEmployeeName}
+                Periodo: ${currentPeriod}
+                Horas Totales: ${currentStats.totalHours}
+                Detalle de Turnos (Día: Código [Horas]):
+                ${currentShiftsForAI.map(s => `Día ${s.day}: ${s.code} [${s.hours}h]`).join(', ')}
+                
+                Solicitud: ${prompt}
+            `;
+
+            try {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: userQuery }] }],
+                        systemInstruction: { parts: [{ text: systemPrompt }] }
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error.message);
+                }
+
+                const aiText = data.candidates[0].content.parts[0].text;
+                
+                // Render Markdown
+                contentDiv.innerHTML = marked.parse(aiText);
+
+            } catch (error) {
+                console.error("Gemini Error:", error);
+                contentDiv.innerHTML = `<p class="text-red-600">Lo siento, hubo un error al conectar con el asistente IA. Por favor intenta de nuevo.</p>`;
+            } finally {
+                loader.classList.add('hidden');
+            }
+        }
+
+        function triggerCustomPrompt() {
+            const input = document.getElementById('customAiPrompt');
+            const val = input.value.trim();
+            if (val) {
+                askGemini(val);
+                input.value = ''; // Clear input
+            }
+        }
+
+        // --- EXISTING CONFIGURATION ---
+        const absenceCodes = {
+            'ABAN': { desc: 'Abandono de Cargo', color: 'bg-red-200 text-red-800' },
+            'AIS': { desc: 'Aislamiento COVID', color: 'bg-red-100 text-red-700' },
+            'A': { desc: 'Ausencia Injustificada', color: 'bg-red-200 text-red-800' },
+            'CAL': { desc: 'Calamidad', color: 'bg-orange-100 text-orange-800' },
+            'D': { desc: 'Descanso', color: 'bg-green-100 text-green-800' },
+            'IEP': { desc: 'Incapacidad Prof.', color: 'bg-red-100 text-red-800' },
+            'AT': { desc: 'Accidente Trabajo', color: 'bg-red-100 text-red-800' },
+            'I': { desc: 'Incapacidad General', color: 'bg-red-100 text-red-800' },
+            'LUTO': { desc: 'Licencia Luto', color: 'bg-purple-100 text-purple-800' },
+            'LM': { desc: 'Licencia Maternidad', color: 'bg-purple-100 text-purple-800' },
+            'LP': { desc: 'Licencia Paternidad', color: 'bg-purple-100 text-purple-800' },
+            'LNR': { desc: 'Lic. No Remunerada', color: 'bg-gray-200 text-gray-800' },
+            'LR': { desc: 'Lic. Remunerada', color: 'bg-purple-100 text-purple-800' },
+            'L': { desc: 'Libre', color: 'bg-white text-gray-400' },
+            'R': { desc: 'Renuncia', color: 'bg-gray-800 text-white' },
+            'S': { desc: 'Sanción', color: 'bg-red-300 text-red-900' },
+            'TT': { desc: 'Teletrabajo', color: 'bg-blue-100 text-blue-800' },
+            'TC': { desc: 'Trabajo en Casa', color: 'bg-blue-100 text-blue-800' },
+            'V': { desc: 'Vacaciones', color: 'bg-yellow-100 text-yellow-800' }
+        };
+
+        // --- COLOMBIAN HOLIDAYS LOGIC ---
+        function getColombianHolidays(year) {
+            const generateForYear = (y) => {
+                const h = [];
+                const fixed = [`${y}-01-01`, `${y}-05-01`, `${y}-07-20`, `${y}-08-07`, `${y}-12-08`, `${y}-12-25`];
+                fixed.forEach(d => h.push(d));
+
+                const addDays = (date, days) => { const r = new Date(date); r.setDate(r.getDate() + days); return r; };
+                const nextMonday = (date) => { const d = date.getDay(); if (d===1) return date; const diff = (8-d)%7; if(diff===0) return addDays(date,1); return addDays(date, (8-date.getDay())%7); };
+
+                const emiliani = [`${y}-01-06`, `${y}-03-19`, `${y}-06-29`, `${y}-08-15`, `${y}-10-12`, `${y}-11-01`, `${y}-11-11`];
+                emiliani.forEach(dStr => { h.push(nextMonday(new Date(dStr + "T00:00:00")).toISOString().split('T')[0]); });
+
+                const a = y%19, b=Math.floor(y/100), c=y%100, d=Math.floor(b/4), e=b%4, f=Math.floor((b+8)/25), g=Math.floor((b-f+1)/3), H=(19*a+b-d-g+15)%30, i=Math.floor(c/4), k=c%4, l=(32+2*e+2*i-H-k)%7, m=Math.floor((a+11*H+22*l)/451), month=Math.floor((H+l-7*m+114)/31), day=((H+l-7*m+114)%31)+1;
+                const easter = new Date(y, month-1, day);
+
+                h.push(addDays(easter, -3).toISOString().split('T')[0]);
+                h.push(addDays(easter, -2).toISOString().split('T')[0]);
+                h.push(nextMonday(addDays(easter, 39)).toISOString().split('T')[0]);
+                h.push(nextMonday(addDays(easter, 60)).toISOString().split('T')[0]);
+                h.push(nextMonday(addDays(easter, 68)).toISOString().split('T')[0]);
+                return h;
+            };
+            const holidaysCurrent = generateForYear(year);
+            const holidaysNext = generateForYear(year + 1);
+            return new Set([...holidaysCurrent, ...holidaysNext]);
+        }
+
+        // --- THE WALKER ALGORITHM (HOUR BY HOUR) ---
+        function calculateDetailedHours(startH, endH, year, month, day, holidaysSet, dayIndex) {
+            let result = { total: 0, dayOrd: 0, nightOrd: 0, dayHol: 0, nightHol: 0 };
+            console.log(`\n--- Analizando Turno Día ${day} (${startH}-${endH}) ---`);
+            let current = new Date(year, month, day, startH, 0, 0);
+            let end = new Date(year, month, day, endH, 0, 0);
+            if (endH <= startH) end.setDate(end.getDate() + 1);
+            let safety = 0;
+
+            while (current < end && safety < 48) {
+                safety++;
+                let h = current.getHours();
+                let nextH = (h + 1) % 24;
+                let y = current.getFullYear(), m = String(current.getMonth() + 1).padStart(2, '0'), d = String(current.getDate()).padStart(2, '0');
+                let dateStr = `${y}-${m}-${d}`;
+                let dayOfWeek = current.getDay();
+                let isHoliday = holidaysSet.has(dateStr) || dayOfWeek === 0;
+                let isNight = (h >= 19 || h < 6);
+
+                result.total++;
+                let category = '';
+                if (isHoliday) {
+                    if (isNight) { result.nightHol++; category = 'Festiva Nocturna'; }
+                    else { result.dayHol++; category = 'Festiva Diurna'; }
+                } else {
+                    if (isNight) { result.nightOrd++; category = 'Ordinaria Nocturna'; }
+                    else { result.dayOrd++; category = 'Ordinaria Diurna'; }
+                }
+                console.log(`[Día ${d}, ${String(h).padStart(2, '0')}:00 - ${String(nextH).padStart(2, '0')}:00] -> ${category} (Festivo: ${isHoliday ? 'SI' : 'NO'})`);
+                current.setHours(current.getHours() + 1);
+            }
+            console.log(`--- Resumen Turno ${day}: Total=${result.total}, Fest.Noc=${result.nightHol}, Fest.Diu=${result.dayHol}, Ord.Noc=${result.nightOrd}, Ord.Diu=${result.dayOrd} ---`);
+            return result;
+        }
+
+        // --- SMART DATA PARSER ---
+        function parseShiftData(parts, daysInMonth) {
+            if (parts.length <= daysInMonth) return parts;
+            let bestScore = -Infinity, bestStartIndex = 0, maxStart = parts.length - daysInMonth;
+            for (let i = 0; i <= maxStart; i++) {
+                let currentScore = 0, windowData = parts.slice(i, i + daysInMonth);
+                for (let cell of windowData) {
+                    let c = cell.toUpperCase().trim().replace(/[\u2013\u2014]/g, '-');
+                    const rangeRegex = /(\d{1,2})(?:[:.]?(\d{2}))?\s*(?:-|A|TO)\s*(\d{1,2})(?:[:.]?(\d{2}))?/gi;
+                    const matches = [...c.matchAll(rangeRegex)];
+                    if (matches.length > 0) currentScore += (5 * matches.length);
+                    else if (['N','L','D','V','I','LM'].includes(c)) currentScore += 3;
+                    else if (absenceCodes[c]) currentScore += 3;
+                    else if (c === '' || c === '#N/A' || c === '0') currentScore += 0;
+                    else if (c.length > 30) currentScore -= 5; 
+                }
+                if (currentScore > bestScore) { bestScore = currentScore; bestStartIndex = i; }
+            }
+            return parts.slice(bestStartIndex, bestStartIndex + daysInMonth);
+        }
+
+        // --- MAIN LOGIC ---
+        function generateSchedule() {
+            const input = document.getElementById('inputData').value;
+            const year = parseInt(document.getElementById('selectYear').value);
+            const month = parseInt(document.getElementById('selectMonth').value);
+
+            if (!input.trim()) { alert("Por favor ingresa los datos de la fila."); return; }
+
+            let parts = [];
+            if (input.indexOf('\t') > -1) parts = input.split('\t');
+            else if (input.indexOf(';') > -1) parts = input.split(';');
+            else parts = input.split(',');
+            parts = parts.map(p => p.trim());
+            while(parts.length > 0 && parts[parts.length-1] === "") parts.pop();
+
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const shiftData = parseShiftData(parts, daysInMonth);
+            
+            let employeeInfo = "Datos cargados";
+            if (parts.length > daysInMonth) employeeInfo = parts.slice(0, 3).join(" ").replace(/['"]+/g, '').substring(0, 50);
+            document.getElementById('displayEmployee').textContent = "Ref: " + employeeInfo;
+            
+            // Set global variables for AI
+            currentEmployeeName = employeeInfo;
+            const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+            currentPeriod = `${monthNames[month]} ${year}`;
+
+            const grid = document.getElementById('calendarGrid');
+            grid.innerHTML = '';
+            document.getElementById('displayMonthYear').textContent = currentPeriod;
+
+            let firstDay = new Date(year, month, 1).getDay();
+            let startOffset = firstDay === 0 ? 6 : firstDay - 1; 
+            for (let i = 0; i < startOffset; i++) {
+                const cell = document.createElement('div');
+                cell.className = "calendar-day bg-slate-50 opacity-50";
+                grid.appendChild(cell);
+            }
+
+            const holidays = getColombianHolidays(year);
+            let stats = { totalHours: 0, dayOrd: 0, nightOrd: 0, dayHol: 0, nightHol: 0, shifts: 0 };
+            let shiftsForAI = [];
+            
+            console.clear();
+            console.log("--- INICIO DE CÁLCULO DE HORAS (Consola F12) ---");
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                let rawCode = shiftData[day-1] || "";
+                let shiftCode = rawCode.replace(/['"]+/g, '').trim().toUpperCase().replace(/[\u2013\u2014]/g, '-'); 
+                const isHoliday = holidays.has(dateStr);
+                
+                const cell = document.createElement('div');
+                cell.className = "calendar-day relative border hover:border-blue-400 transition-colors";
+                const dateDiv = document.createElement('div');
+                dateDiv.className = `font-bold text-sm ${isHoliday || new Date(year, month, day).getDay()===0 ? 'text-red-600' : 'text-slate-700'}`;
+                dateDiv.innerHTML = day + (isHoliday ? ' <i class="fa-solid fa-flag text-[10px] ml-1" title="Festivo"></i>' : '');
+                cell.appendChild(dateDiv);
+
+                const contentDiv = document.createElement('div');
+                contentDiv.className = "flex-grow flex flex-col items-center justify-center text-center p-1 mt-1 rounded text-xs font-semibold break-words w-full";
+                
+                let bgColor = "bg-white", textColor = "text-slate-800";
+                let parsedHours = { total: 0, dayOrd: 0, nightOrd: 0, dayHol: 0, nightHol: 0 };
+                let isWork = false;
+
+                const rangeRegex = /(\d{1,2})(?:[:.]?(\d{2}))?\s*(?:-|A|TO)\s*(\d{1,2})(?:[:.]?(\d{2}))?/gi;
+                const matches = [...shiftCode.matchAll(rangeRegex)];
+
+                if (matches.length > 0) {
+                    isWork = true;
+                    let cellText = "";
+                    matches.forEach((match, index) => {
+                         let start = parseInt(match[1]), end = parseInt(match[3]); 
+                         let segmentHours = calculateDetailedHours(start, end, year, month, day, holidays, day);
+                         parsedHours.total += segmentHours.total;
+                         parsedHours.dayOrd += segmentHours.dayOrd;
+                         parsedHours.nightOrd += segmentHours.nightOrd;
+                         parsedHours.dayHol += segmentHours.dayHol;
+                         parsedHours.nightHol += segmentHours.nightHol;
+                         if (index > 0) cellText += "<br>";
+                         cellText += `${start}-${end}`;
+                    });
+                    contentDiv.innerHTML = cellText;
+                    if (parsedHours.nightOrd > 0 || parsedHours.nightHol > 0) { bgColor = "bg-indigo-50"; textColor = "text-indigo-900"; }
+                    else { bgColor = "bg-blue-50"; textColor = "text-blue-900"; }
+                } else if (shiftCode === "N") {
+                    isWork = true;
+                    contentDiv.textContent = "19-7";
+                    bgColor = "bg-indigo-100";
+                    textColor = "text-indigo-900";
+                    parsedHours = calculateDetailedHours(19, 7, year, month, day, holidays, day);
+                } else if (absenceCodes[shiftCode]) {
+                    contentDiv.textContent = shiftCode;
+                    contentDiv.title = absenceCodes[shiftCode].desc;
+                    let style = absenceCodes[shiftCode].color.split(" ");
+                    bgColor = style[0]; textColor = style[1];
+                } else if (shiftCode !== "" && shiftCode !== "#N/A" && shiftCode !== "0") {
+                    contentDiv.textContent = shiftCode;
+                    bgColor = "bg-gray-100";
+                }
+
+                stats.totalHours += parsedHours.total;
+                stats.dayOrd += parsedHours.dayOrd;
+                stats.nightOrd += parsedHours.nightOrd;
+                stats.dayHol += parsedHours.dayHol;
+                stats.nightHol += parsedHours.nightHol;
+                if (isWork) stats.shifts++;
+
+                contentDiv.classList.add(bgColor, textColor);
+                if (shiftCode && shiftCode !== "0" && shiftCode !== "#N/A") cell.appendChild(contentDiv);
+                grid.appendChild(cell);
+
+                shiftsForAI.push({ day, code: shiftCode, hours: parsedHours.total, isNight: (parsedHours.nightOrd + parsedHours.nightHol) > 0 });
+            }
+            
+            // Save globals
+            currentShiftsForAI = shiftsForAI;
+            currentStats = stats;
+
+            const totalCells = startOffset + daysInMonth, remaining = 7 - (totalCells % 7);
+            if (remaining < 7) { for (let i = 0; i < remaining; i++) { const c = document.createElement('div'); c.className = "calendar-day bg-slate-50 opacity-50"; grid.appendChild(c); } }
+
+            document.getElementById('totalHours').textContent = stats.totalHours;
+            document.getElementById('hoursDay').textContent = stats.dayOrd;
+            document.getElementById('hoursNight').textContent = stats.nightOrd;
+            document.getElementById('hoursHolDay').textContent = stats.dayHol;
+            document.getElementById('hoursHolNight').textContent = stats.nightHol;
+            document.getElementById('totalShifts').textContent = stats.shifts;
+
+            document.getElementById('scheduleContainer').classList.remove('hidden');
+            document.getElementById('aiAssistantContainer').classList.remove('hidden');
+            document.getElementById('btnDownload').disabled = false;
+            document.getElementById('btnDownload').classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+
+        async function downloadPDF() {
+            const { jsPDF } = window.jspdf;
+            const element = document.getElementById('printableArea');
+            const btn = document.getElementById('btnDownload');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Procesando...';
+            btn.disabled = true;
+            try {
+                const canvas = await html2canvas(element, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+                const imgData = canvas.toDataURL('image/png');
+                const pdf = new jsPDF('l', 'mm', 'a4');
+                const pdfW = pdf.internal.pageSize.getWidth();
+                const imgH = (canvas.height * pdfW) / canvas.width;
+                pdf.addImage(imgData, 'PNG', 0, 10, pdfW, imgH);
+                const m = document.getElementById('selectMonth');
+                pdf.save(`Malla_Turnos_${m.options[m.selectedIndex].text}.pdf`);
+            } catch (error) { console.error(error); alert("Error generando PDF"); } finally { btn.innerHTML = originalText; btn.disabled = false; }
+        }
+    </script>
+</body>
+</html>
