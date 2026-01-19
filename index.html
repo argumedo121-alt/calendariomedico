@@ -416,12 +416,10 @@
                 const isWeekend = date.getDay() === 0 || date.getDay() === 6;
 
                 const cell = document.createElement('div');
-                // APLICANDO ANIMACIÓN DE HOVER AQUÍ
                 cell.className = `calendar-day ${isWeekend ? 'weekend' : ''} transform transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:z-10 hover:border-indigo-200 cursor-default`;
                 
                 const head = document.createElement('div');
                 head.className = "flex justify-between items-start mb-1";
-                // REDUCCIÓN LIGERA DE TAMAÑO (text-2xl)
                 head.innerHTML = `<span class="text-2xl font-black ${isHol||date.getDay()===0 ? 'text-red-500' : 'text-slate-700'}">${d}</span>`;
                 if(isHol) head.innerHTML += '<i class="fa-solid fa-flag text-red-500 text-sm mt-2"></i>';
                 cell.appendChild(head);
@@ -433,12 +431,50 @@
                 let code = raw.replace(/['"]+/g, '').trim().toUpperCase();
                 let hrs = { total: 0, dayOrd: 0, nightOrd: 0, dayHol: 0, nightHol: 0 };
 
+                // --- NUEVA LÓGICA DE PRIORI MEJORADA ---
+                let prioriInfo = null;
+                const prioriIndex = code.indexOf("PRIORI");
+                if (prioriIndex !== -1) {
+                    const prioriText = code.substring(prioriIndex).trim();
+                    code = code.substring(0, prioriIndex).trim();
+                    
+                    // Parseo inteligente de "PRIORI (7-9PM)" o "PRIORI 19-21"
+                    let clean = prioriText.replace(/[()]/g, '').replace(/PRIORI[-\s]*T?/i, '').trim();
+                    let parts = clean.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*[-–]\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
+                    
+                    if (parts) {
+                        let h1 = parseInt(parts[1]);
+                        let ampm1 = parts[3] ? parts[3].toUpperCase() : null;
+                        let h2 = parseInt(parts[4]);
+                        let ampm2 = parts[6] ? parts[6].toUpperCase() : null;
+                        
+                        // Heurística para "7-9PM" -> Asumir 7PM (19)
+                        if (!ampm1 && ampm2) {
+                            let tempH2 = (ampm2 === 'PM' && h2 < 12) ? h2 + 12 : ((ampm2 === 'AM' && h2 === 12) ? 0 : h2);
+                            if (tempH2 - h1 > 10) ampm1 = ampm2; // Si la diferencia es grande, asume PM en el inicio
+                        }
+                        if (ampm1 === 'PM' && h1 < 12) h1 += 12;
+                        if (ampm1 === 'AM' && h1 === 12) h1 = 0;
+                        if (ampm2 === 'PM' && h2 < 12) h2 += 12;
+                        if (ampm2 === 'AM' && h2 === 12) h2 = 0;
+                        
+                        prioriInfo = { s: h1, e: h2, text: `PRIORI ${h1.toString().padStart(2,'0')}:00 - ${h2.toString().padStart(2,'0')}:00` };
+                    } else {
+                         // Fallback si no hay horas legibles
+                         prioriInfo = { s: 0, e: 0, text: prioriText, unknown: true };
+                    }
+                }
+                // -----------------------------------
+
                 const ranges = [...code.matchAll(/(\d{1,2})(?:[:.]?(\d{2}))?\s*(?:-|A|TO)\s*(\d{1,2})/gi)];
                 
+                let mainShiftIntervals = []; // Guardamos intervalos principales para comparación
+
                 if (ranges.length > 0) {
                     st.shifts++;
                     ranges.forEach(r => {
                         let s = parseInt(r[1]), e = parseInt(r[3]);
+                        mainShiftIntervals.push({s, e}); // Guardar para comparar
                         let h = calculateHours(s, e, year, month, d, holidays);
                         st.total += h.total; 
                         st.dayOrd += h.dayOrd; st.nightOrd += h.nightOrd; 
@@ -449,7 +485,9 @@
                     });
                 } else if (code === "N") {
                     st.shifts++;
-                    let h = calculateHours(19, 7, year, month, d, holidays);
+                    let s=19, e=7;
+                    mainShiftIntervals.push({s, e});
+                    let h = calculateHours(s, e, year, month, d, holidays);
                     st.total += h.total; st.dayOrd += h.dayOrd; st.nightOrd += h.nightOrd; st.dayHol += h.dayHol; st.nightHol += h.nightHol;
                     content.innerHTML += `<div class="shift-pill shift-night w-full"><span class="shift-main-text">19 - 07</span><span class="shift-sub-text">12h</span></div>`;
                     hrs.total = 12;
@@ -457,6 +495,38 @@
                     content.innerHTML += `<div class="shift-pill ${absenceCodes[code].class} w-full"><span class="shift-main-text text-base">${code}</span><span class="text-[10px] uppercase font-bold mt-1">${absenceCodes[code].desc.split(' ')[0]}</span></div>`;
                 } else if (code && code !== "0") {
                     content.innerHTML += `<div class="shift-pill bg-slate-200 text-slate-600 w-full"><span class="font-bold text-base">${code}</span></div>`;
+                }
+
+                // --- EVALUAR PRIORI: DENTRO O FUERA? ---
+                if (prioriInfo) {
+                    let isInside = false;
+                    if (!prioriInfo.unknown && mainShiftIntervals.length > 0) {
+                        // Verificar si el rango priori está contenido en algún intervalo principal
+                        for (let main of mainShiftIntervals) {
+                            // Normalizar a línea de tiempo lineal para cruces de medianoche
+                            let ms = main.s, me = main.e <= main.s ? main.e + 24 : main.e;
+                            let ps = prioriInfo.s, pe = prioriInfo.e <= prioriInfo.s ? prioriInfo.e + 24 : prioriInfo.e;
+                            
+                            // Ajuste si priori empieza "antes" pero en realidad es PM vs AM del dia siguiente (caso raro, asumimos mismo día base)
+                            if (ps >= ms && pe <= me) {
+                                isInside = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Si NO está dentro (o no hay turno principal), sumar horas y marcar visualmente
+                    if (!isInside && !prioriInfo.unknown) {
+                        let h = calculateHours(prioriInfo.s, prioriInfo.e, year, month, d, holidays);
+                        st.total += h.total; 
+                        st.dayOrd += h.dayOrd; st.nightOrd += h.nightOrd; 
+                        st.dayHol += h.dayHol; st.nightHol += h.nightHol;
+                        // Añadimos indicador visual de que SUMA
+                         content.innerHTML += `<div class="mt-1 text-[9px] font-bold text-slate-600 leading-tight border-t border-slate-200 pt-1 break-words bg-yellow-50 rounded px-1 text-center border">${prioriInfo.text} (+${h.total}h)</div>`;
+                    } else {
+                        // Solo mostrar nota
+                        content.innerHTML += `<div class="mt-1 text-[9px] font-bold text-slate-500 leading-tight border-t border-slate-100 pt-1 break-words text-center">${prioriInfo.text}</div>`;
+                    }
                 }
 
                 cell.appendChild(content);
@@ -557,7 +627,7 @@
         }
 
         function loadDemoData() {
-            document.getElementById('inputData').value = "D, 7-19, 7-19, 19-7, 19-7, D, D, 7-19, 7-19, 19-7, D, D, 7-19, 13-19, V, V, V, V, V, 7-19, 7-19, D, 19-7, 19-7, D, D, 7-19, 7-19, D, D, 12-24";
+            document.getElementById('inputData').value = "D, 7-19, 7-19, 19-7, 19-7, D, D, 7-19, 7-19, 19-7, D, D, 7-19, 13-19, V, V, V, V, V, 7-19, 7-19, D, 19-7, 19-7, D, D, 7-19, 7-19 PRIORI (7-9PM), D, D, 12-24";
             document.getElementById('manualName').value = "Dr. Alejandro Magno";
         }
     </script>
