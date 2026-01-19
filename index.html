@@ -112,6 +112,9 @@
             <button onclick="openConfig()" class="bg-white border border-slate-300 text-slate-600 hover:border-indigo-500 hover:text-indigo-600 px-4 py-2 rounded-lg font-semibold transition text-sm">
                 <i class="fa-solid fa-sliders mr-2"></i> Datos
             </button>
+            <button onclick="downloadICS()" id="btnICS" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-bold shadow-lg disabled:opacity-50 transition text-sm" disabled>
+                <i class="fa-solid fa-calendar-days mr-2"></i> G. Calendar
+            </button>
             <button onclick="downloadPDF()" id="btnDownload" class="bg-slate-900 hover:bg-black text-white px-4 py-2 rounded-lg font-bold shadow-lg disabled:opacity-50 transition text-sm" disabled>
                 <i class="fa-solid fa-download mr-2"></i> PDF
             </button>
@@ -326,6 +329,7 @@
             'LM': { desc: 'Lic. Maternidad', class: 'bg-pink-100 text-pink-800 border-pink-300' }
         };
         let currentShiftsForAI = [], currentStats = {}, currentEmployeeName = "", currentPeriod = "";
+        let exportableEvents = [];
 
         function getColombianHolidays(year) {
             const generate = (y) => {
@@ -371,6 +375,7 @@
             document.getElementById('scheduleContainer').classList.remove('hidden');
             document.getElementById('aiFab').classList.remove('hidden');
             document.getElementById('btnDownload').disabled = false;
+            document.getElementById('btnICS').disabled = false;
             document.getElementById('aiActions').classList.remove('hidden');
             document.getElementById('chatHistory').innerHTML = '';
 
@@ -409,6 +414,9 @@
             const holidays = getColombianHolidays(year);
             let st = { total: 0, dayOrd: 0, nightOrd: 0, dayHol: 0, nightHol: 0, shifts: 0 };
             let aiData = [];
+            
+            // RESET EXPORTABLE EVENTS
+            exportableEvents = [];
 
             for (let d = 1; d <= daysInMonth; d++) {
                 const date = new Date(year, month, d);
@@ -438,7 +446,6 @@
                     const prioriText = code.substring(prioriIndex).trim();
                     code = code.substring(0, prioriIndex).trim();
                     
-                    // Parseo inteligente de "PRIORI (7-9PM)" o "PRIORI 19-21"
                     let clean = prioriText.replace(/[()]/g, '').replace(/PRIORI[-\s]*T?/i, '').trim();
                     let parts = clean.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*[-–]\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
                     
@@ -448,10 +455,9 @@
                         let h2 = parseInt(parts[4]);
                         let ampm2 = parts[6] ? parts[6].toUpperCase() : null;
                         
-                        // Heurística para "7-9PM" -> Asumir 7PM (19)
                         if (!ampm1 && ampm2) {
                             let tempH2 = (ampm2 === 'PM' && h2 < 12) ? h2 + 12 : ((ampm2 === 'AM' && h2 === 12) ? 0 : h2);
-                            if (tempH2 - h1 > 10) ampm1 = ampm2; // Si la diferencia es grande, asume PM en el inicio
+                            if (tempH2 - h1 > 10) ampm1 = ampm2;
                         }
                         if (ampm1 === 'PM' && h1 < 12) h1 += 12;
                         if (ampm1 === 'AM' && h1 === 12) h1 = 0;
@@ -460,7 +466,6 @@
                         
                         prioriInfo = { s: h1, e: h2, text: `PRIORI ${h1.toString().padStart(2,'0')}:00 - ${h2.toString().padStart(2,'0')}:00` };
                     } else {
-                         // Fallback si no hay horas legibles
                          prioriInfo = { s: 0, e: 0, text: prioriText, unknown: true };
                     }
                 }
@@ -468,13 +473,13 @@
 
                 const ranges = [...code.matchAll(/(\d{1,2})(?:[:.]?(\d{2}))?\s*(?:-|A|TO)\s*(\d{1,2})/gi)];
                 
-                let mainShiftIntervals = []; // Guardamos intervalos principales para comparación
+                let mainShiftIntervals = [];
 
                 if (ranges.length > 0) {
                     st.shifts++;
                     ranges.forEach(r => {
                         let s = parseInt(r[1]), e = parseInt(r[3]);
-                        mainShiftIntervals.push({s, e}); // Guardar para comparar
+                        mainShiftIntervals.push({s, e});
                         let h = calculateHours(s, e, year, month, d, holidays);
                         st.total += h.total; 
                         st.dayOrd += h.dayOrd; st.nightOrd += h.nightOrd; 
@@ -482,6 +487,12 @@
                         hrs.total += h.total;
                         let pillClass = (h.nightOrd + h.nightHol) > 0 ? ((h.dayOrd + h.dayHol) > 0 ? "shift-mixed" : "shift-night") : "shift-day";
                         content.innerHTML += `<div class="shift-pill ${pillClass} w-full"><span class="shift-main-text">${s} - ${e}</span><span class="shift-sub-text">${h.total}h</span></div>`;
+
+                        // Add to export
+                        let startDt = new Date(year, month, d, s, 0);
+                        let endDt = new Date(year, month, d, e, 0);
+                        if(e <= s) endDt.setDate(endDt.getDate() + 1);
+                        exportableEvents.push({ start: startDt, end: endDt, title: `Turno ${s}-${e}` });
                     });
                 } else if (code === "N") {
                     st.shifts++;
@@ -491,8 +502,22 @@
                     st.total += h.total; st.dayOrd += h.dayOrd; st.nightOrd += h.nightOrd; st.dayHol += h.dayHol; st.nightHol += h.nightHol;
                     content.innerHTML += `<div class="shift-pill shift-night w-full"><span class="shift-main-text">19 - 07</span><span class="shift-sub-text">12h</span></div>`;
                     hrs.total = 12;
+
+                    // Add to export
+                    let startDt = new Date(year, month, d, 19, 0);
+                    let endDt = new Date(year, month, d, 7, 0);
+                    endDt.setDate(endDt.getDate() + 1);
+                    exportableEvents.push({ start: startDt, end: endDt, title: `Turno 19-07` });
+
                 } else if (absenceCodes[code]) {
                     content.innerHTML += `<div class="shift-pill ${absenceCodes[code].class} w-full"><span class="shift-main-text text-base">${code}</span><span class="text-[10px] uppercase font-bold mt-1">${absenceCodes[code].desc.split(' ')[0]}</span></div>`;
+                    
+                    // Add absence as full day event logic or specific hours? Let's assume all day for simplicity if no hours
+                    // Standard calendar "All Day" starts at midnight
+                    let startDt = new Date(year, month, d, 0, 0);
+                    let endDt = new Date(year, month, d, 23, 59);
+                    exportableEvents.push({ start: startDt, end: endDt, title: `${absenceCodes[code].desc} (${code})`, allDay: true });
+
                 } else if (code && code !== "0") {
                     content.innerHTML += `<div class="shift-pill bg-slate-200 text-slate-600 w-full"><span class="font-bold text-base">${code}</span></div>`;
                 }
@@ -501,13 +526,9 @@
                 if (prioriInfo) {
                     let isInside = false;
                     if (!prioriInfo.unknown && mainShiftIntervals.length > 0) {
-                        // Verificar si el rango priori está contenido en algún intervalo principal
                         for (let main of mainShiftIntervals) {
-                            // Normalizar a línea de tiempo lineal para cruces de medianoche
                             let ms = main.s, me = main.e <= main.s ? main.e + 24 : main.e;
                             let ps = prioriInfo.s, pe = prioriInfo.e <= prioriInfo.s ? prioriInfo.e + 24 : prioriInfo.e;
-                            
-                            // Ajuste si priori empieza "antes" pero en realidad es PM vs AM del dia siguiente (caso raro, asumimos mismo día base)
                             if (ps >= ms && pe <= me) {
                                 isInside = true;
                                 break;
@@ -515,17 +536,22 @@
                         }
                     }
 
-                    // Si NO está dentro (o no hay turno principal), sumar horas y marcar visualmente
                     if (!isInside && !prioriInfo.unknown) {
                         let h = calculateHours(prioriInfo.s, prioriInfo.e, year, month, d, holidays);
                         st.total += h.total; 
                         st.dayOrd += h.dayOrd; st.nightOrd += h.nightOrd; 
                         st.dayHol += h.dayHol; st.nightHol += h.nightHol;
-                        // Añadimos indicador visual de que SUMA
                          content.innerHTML += `<div class="mt-1 text-[9px] font-bold text-slate-600 leading-tight border-t border-slate-200 pt-1 break-words bg-yellow-50 rounded px-1 text-center border">${prioriInfo.text} (+${h.total}h)</div>`;
+                        
+                        // Add extra priori to export
+                        let startDt = new Date(year, month, d, prioriInfo.s, 0);
+                        let endDt = new Date(year, month, d, prioriInfo.e, 0);
+                        if(prioriInfo.e <= prioriInfo.s) endDt.setDate(endDt.getDate() + 1);
+                        exportableEvents.push({ start: startDt, end: endDt, title: `Extra: ${prioriInfo.text}` });
+
                     } else {
-                        // Solo mostrar nota
                         content.innerHTML += `<div class="mt-1 text-[9px] font-bold text-slate-500 leading-tight border-t border-slate-100 pt-1 break-words text-center">${prioriInfo.text}</div>`;
+                        // Note: Internal Priori is just a note, usually not a separate calendar event, but could be added to description.
                     }
                 }
 
@@ -573,6 +599,56 @@
                 pdf.save(`Turnos_${currentEmployeeName.replace(/\s+/g,'_')}.pdf`);
             } catch (err) { alert("Error PDF"); } 
             finally { btn.innerHTML = originalHTML; btn.disabled = false; }
+        }
+
+        // --- NEW ICS LOGIC ---
+        function formatICSDate(date, isAllDay = false) {
+            const pad = n => n < 10 ? '0' + n : n;
+            const y = date.getFullYear();
+            const m = pad(date.getMonth() + 1);
+            const d = pad(date.getDate());
+            if (isAllDay) return `${y}${m}${d}`;
+            const h = pad(date.getHours());
+            const min = pad(date.getMinutes());
+            const s = pad(date.getSeconds());
+            return `${y}${m}${d}T${h}${min}${s}`;
+        }
+
+        function downloadICS() {
+            if (exportableEvents.length === 0) { alert("No hay turnos para exportar."); return; }
+            
+            let icsContent = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//GestorTurnosAI//NONSGML v1.0//ES\nCALSCALE:GREGORIAN\nMETHOD:PUBLISH\n";
+            
+            const now = formatICSDate(new Date());
+
+            exportableEvents.forEach((evt, index) => {
+                icsContent += "BEGIN:VEVENT\n";
+                icsContent += `UID:turnos-${index}-${Date.now()}@gestorpro.ai\n`;
+                icsContent += `DTSTAMP:${now}\n`;
+                
+                if (evt.allDay) {
+                    icsContent += `DTSTART;VALUE=DATE:${formatICSDate(evt.start, true)}\n`;
+                    // For all day events, end date is usually exclusive (+1 day), handled in generation or standard
+                    icsContent += `DTEND;VALUE=DATE:${formatICSDate(evt.end, true)}\n`;
+                } else {
+                    icsContent += `DTSTART:${formatICSDate(evt.start)}\n`;
+                    icsContent += `DTEND:${formatICSDate(evt.end)}\n`;
+                }
+                
+                icsContent += `SUMMARY:${evt.title}\n`;
+                icsContent += `DESCRIPTION:Generado por Gestor de Turnos AI\n`;
+                icsContent += "END:VEVENT\n";
+            });
+
+            icsContent += "END:VCALENDAR";
+
+            const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+            const link = document.createElement('a');
+            link.href = window.URL.createObjectURL(blob);
+            link.setAttribute('download', `Calendario_${currentEmployeeName.replace(/\s+/g,'_')}.ics`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         }
 
         async function askGemini(prompt) {
